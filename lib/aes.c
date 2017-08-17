@@ -1,6 +1,7 @@
 
 /*
- *  this file comes from https://github.com/kokke/tiny-AES128-C
+ *  this file comes from https://github.com/kokke/tiny-AES-c
+ *                   and https://github.com/linusyang/tiny-AES-c
  */
 
 /*
@@ -43,6 +44,7 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
 #include <stdint.h>
 #include <string.h> // CBC mode, for memset
 #include "aes.h"
+#include "aesni.h"
 
 /*****************************************************************************/
 /* Defines:                                                                  */
@@ -56,16 +58,19 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
     #define KEYLEN 32
     #define Nr 14
     #define keyExpSize 240
+    #define aesni_setkey_enc aesni_setkey_enc_256
 #elif defined(AES192) && (AES192 == 1)
     #define Nk 6
     #define KEYLEN 24
     #define Nr 12
     #define keyExpSize 208
+    #define aesni_setkey_enc aesni_setkey_enc_192
 #else
     #define Nk 4        // The number of 32 bit words in a key.
     #define KEYLEN 16   // Key length in bytes
     #define Nr 10       // The number of rounds in AES Cipher.
     #define keyExpSize 176
+    #define aesni_setkey_enc aesni_setkey_enc_128
 #endif
 
 // jcallan@github points out that declaring Multiply as a function 
@@ -480,6 +485,21 @@ static void InvCipher(void)
 
 void AES_ECB_encrypt(const uint8_t* input, const uint8_t* key, uint8_t* output, const uint32_t length)
 {
+#if defined(HAVE_AMD64)
+  uint8_t rk[AES_RKSIZE];
+
+  if (aesni_supported())
+  {
+    if (key == NULL)
+    {
+      return;
+    }
+    aesni_setkey_enc(rk, key);
+    aesni_crypt_ecb(Nr, rk, AES_ENCRYPT, input, output);
+    return;
+  }
+#endif
+
   // Copy input to output, and work in-memory on output
   memcpy(output, input, length);
   state = (state_t*)output;
@@ -493,6 +513,23 @@ void AES_ECB_encrypt(const uint8_t* input, const uint8_t* key, uint8_t* output, 
 
 void AES_ECB_decrypt(const uint8_t* input, const uint8_t* key, uint8_t *output, const uint32_t length)
 {
+#if defined(HAVE_AMD64)
+  uint8_t rk[AES_RKSIZE];
+  uint8_t rk_tmp[AES_RKSIZE];
+
+  if (aesni_supported())
+  {
+    if (key == NULL)
+    {
+      return;
+    }
+    aesni_setkey_enc(rk_tmp, key);
+    aesni_inverse_key(rk, rk_tmp, Nr);
+    aesni_crypt_ecb(Nr, rk, AES_DECRYPT, input, output);
+    return;
+  }
+#endif
+
   // Copy input to output, and work in-memory on output
   memcpy(output, input, length);
   state = (state_t*)output;
@@ -513,6 +550,55 @@ void AES_ECB_decrypt(const uint8_t* input, const uint8_t* key, uint8_t *output, 
 
 #if defined(CBC) && (CBC == 1)
 
+#if defined(HAVE_AMD64)
+/*
+ * AESNI-CBC buffer encryption/decryption
+ */
+static void aesni_crypt_cbc( int mode,
+                             int nr,
+                             uint8_t* rk,
+                             uint32_t length,
+                             uint8_t iv[16],
+                             const uint8_t *input,
+                             uint8_t *output )
+{
+    int i;
+    uint8_t temp[16];
+
+    if( mode == AES_DECRYPT )
+    {
+        while( length > 0 )
+        {
+            memcpy( temp, input, 16 );
+            aesni_crypt_ecb( nr, rk, mode, input, output );
+
+            for( i = 0; i < 16; i++ )
+                output[i] = (uint8_t)( output[i] ^ iv[i] );
+
+            memcpy( iv, temp, 16 );
+
+            input  += 16;
+            output += 16;
+            length -= 16;
+        }
+    }
+    else
+    {
+        while( length > 0 )
+        {
+            for( i = 0; i < 16; i++ )
+                output[i] = (uint8_t)( input[i] ^ iv[i] );
+
+            aesni_crypt_ecb( nr, rk, mode, output, output );
+            memcpy( iv, output, 16 );
+
+            input  += 16;
+            output += 16;
+            length -= 16;
+        }
+    }
+}
+#endif /* HAVE_AMD64 */
 
 static void XorWithIv(uint8_t* buf)
 {
@@ -527,6 +613,24 @@ void AES_CBC_encrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length, co
 {
   uintptr_t i;
   uint8_t extra = length % BLOCKLEN; /* Remaining bytes in the last non-full block */
+
+#if defined(HAVE_AMD64)
+  uint8_t iv_tmp[16];
+  uint8_t rk[AES_RKSIZE];
+
+  if (aesni_supported())
+  {
+    if (key == NULL || iv == NULL)
+    {
+      return;
+    }
+    memcpy(iv_tmp, iv, 16);
+    aesni_setkey_enc(rk, key);
+    aesni_crypt_cbc(AES_ENCRYPT, Nr, rk, \
+                    length, iv_tmp, input, output);
+    return;
+  }
+#endif
 
   // Skip the key expansion if key is passed as 0
   if (0 != key)
@@ -564,6 +668,26 @@ void AES_CBC_decrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length, co
 {
   uintptr_t i;
   uint8_t extra = length % BLOCKLEN; /* Remaining bytes in the last non-full block */
+
+#if defined(HAVE_AMD64)
+  uint8_t iv_tmp[16];
+  uint8_t rk[AES_RKSIZE];
+  uint8_t rk_tmp[AES_RKSIZE];
+
+  if (aesni_supported())
+  {
+    if (key == NULL || iv == NULL)
+    {
+      return;
+    }
+    memcpy(iv_tmp, iv, 16);
+    aesni_setkey_enc(rk_tmp, key);
+    aesni_inverse_key(rk, rk_tmp, Nr);
+    aesni_crypt_cbc(AES_DECRYPT, Nr, rk, \
+                    length, iv_tmp, input, output);
+    return;
+  }
+#endif
 
   // Skip the key expansion if key is passed as 0
   if (0 != key)

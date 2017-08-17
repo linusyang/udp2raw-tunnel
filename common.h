@@ -31,7 +31,9 @@
 #include <fcntl.h>
 #include <byteswap.h>
 #include <arpa/inet.h>
+#ifndef HAVE_MUSL
 #include <linux/if_ether.h>
+#endif
 #include <linux/filter.h>
 #include <sys/time.h>
 #include <time.h>

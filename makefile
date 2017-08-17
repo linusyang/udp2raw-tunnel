@@ -55,6 +55,12 @@ cross3:
 release: amd64 x86 ar71xx bcm2708 arm amd64_hw_aes arm_asm_aes x86_asm_aes
 	tar -zcvf ${TAR}
 
+docker:
+	rm -f ${NAME}_binaries.tar.gz
+	docker build --force-rm -t ${NAME} .
+	docker run --rm --entrypoint cat ${NAME} /${NAME}/${NAME}_bin.tgz > ${NAME}_binaries.tar.gz
+	docker rmi ${NAME}
+
 clean:	
 	rm -f ${TAR}
 	rm -f udp2raw udp2raw_cross

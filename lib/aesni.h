@@ -29,8 +29,14 @@
 #ifndef _AESNI_H_
 #define _AESNI_H_
 
+#ifndef AES_ENCRYPT
 #define AES_ENCRYPT     1
+#endif
+
+#ifndef AES_DECRYPT
 #define AES_DECRYPT     0
+#endif
+
 #define AES_RKSIZE      272
 
 #if defined(__GNUC__) &&  \

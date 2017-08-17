@@ -45,6 +45,7 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
 #include <string.h> // CBC mode, for memset
 #include "aes.h"
 #include "aesni.h"
+#include "aesarm.h"
 
 /*****************************************************************************/
 /* Defines:                                                                  */
@@ -58,19 +59,38 @@ NOTE:   String length must be evenly divisible by 16byte (str_len % 16 == 0)
     #define KEYLEN 32
     #define Nr 14
     #define keyExpSize 240
-    #define aesni_setkey_enc aesni_setkey_enc_256
+    #ifdef HAVE_AMD64
+      #define aes_setkey_enc aesni_setkey_enc_256
+    #endif
 #elif defined(AES192) && (AES192 == 1)
     #define Nk 6
     #define KEYLEN 24
     #define Nr 12
     #define keyExpSize 208
-    #define aesni_setkey_enc aesni_setkey_enc_192
+    #ifdef HAVE_AMD64
+      #define aes_setkey_enc aesni_setkey_enc_192
+    #endif
 #else
     #define Nk 4        // The number of 32 bit words in a key.
     #define KEYLEN 16   // Key length in bytes
     #define Nr 10       // The number of rounds in AES Cipher.
     #define keyExpSize 176
-    #define aesni_setkey_enc aesni_setkey_enc_128
+    #ifdef HAVE_AMD64
+      #define aes_setkey_enc aesni_setkey_enc_128
+    #endif
+#endif
+
+#ifdef HAVE_AMD64
+#define HAVE_HARDAES 1
+#define aes_supported aesni_supported
+#define aes_crypt_ecb aesni_crypt_ecb
+#define aes_inverse_key aesni_inverse_key
+#endif
+
+#ifdef HAVE_ARM64
+#define HAVE_HARDAES 1
+#define aes_supported aesarm_supported
+#define aes_crypt_ecb aesarm_crypt_ecb
 #endif
 
 // jcallan@github points out that declaring Multiply as a function 
@@ -476,6 +496,51 @@ static void InvCipher(void)
   AddRoundKey(0);
 }
 
+#ifdef HAVE_ARM64
+
+#include "aesarm_table.h"
+
+void aes_setkey_enc(uint8_t *rk, const uint8_t *key)
+{
+  Key = key;
+  KeyExpansion();
+  memcpy(rk, RoundKey, keyExpSize);
+}
+
+void aes_inverse_key(uint8_t *invkey,
+                     const uint8_t *fwdkey, int nr)
+{
+  int i, j;
+  uint32_t *RK;
+  uint32_t *SK;
+
+  RK = (uint32_t *) invkey;
+  SK = ((uint32_t *) fwdkey) + nr * 4;
+
+  *RK++ = *SK++;
+  *RK++ = *SK++;
+  *RK++ = *SK++;
+  *RK++ = *SK++;
+
+  for( i = nr - 1, SK -= 8; i > 0; i--, SK -= 8 )
+  {
+      for( j = 0; j < 4; j++, SK++ )
+      {
+          *RK++ = RT0[ sbox[ ( *SK       ) & 0xFF ] ] ^
+                  RT1[ sbox[ ( *SK >>  8 ) & 0xFF ] ] ^
+                  RT2[ sbox[ ( *SK >> 16 ) & 0xFF ] ] ^
+                  RT3[ sbox[ ( *SK >> 24 ) & 0xFF ] ];
+      }
+  }
+
+  *RK++ = *SK++;
+  *RK++ = *SK++;
+  *RK++ = *SK++;
+  *RK++ = *SK++;
+}
+
+#endif
+
 
 /*****************************************************************************/
 /* Public functions:                                                         */
@@ -485,17 +550,17 @@ static void InvCipher(void)
 
 void AES_ECB_encrypt(const uint8_t* input, const uint8_t* key, uint8_t* output, const uint32_t length)
 {
-#if defined(HAVE_AMD64)
+#if defined(HAVE_HARDAES)
   uint8_t rk[AES_RKSIZE];
 
-  if (aesni_supported())
+  if (aes_supported())
   {
     if (key == NULL)
     {
       return;
     }
-    aesni_setkey_enc(rk, key);
-    aesni_crypt_ecb(Nr, rk, AES_ENCRYPT, input, output);
+    aes_setkey_enc(rk, key);
+    aes_crypt_ecb(Nr, rk, AES_ENCRYPT, input, output);
     return;
   }
 #endif
@@ -513,19 +578,19 @@ void AES_ECB_encrypt(const uint8_t* input, const uint8_t* key, uint8_t* output, 
 
 void AES_ECB_decrypt(const uint8_t* input, const uint8_t* key, uint8_t *output, const uint32_t length)
 {
-#if defined(HAVE_AMD64)
+#if defined(HAVE_HARDAES)
   uint8_t rk[AES_RKSIZE];
   uint8_t rk_tmp[AES_RKSIZE];
 
-  if (aesni_supported())
+  if (aes_supported())
   {
     if (key == NULL)
     {
       return;
     }
-    aesni_setkey_enc(rk_tmp, key);
-    aesni_inverse_key(rk, rk_tmp, Nr);
-    aesni_crypt_ecb(Nr, rk, AES_DECRYPT, input, output);
+    aes_setkey_enc(rk_tmp, key);
+    aes_inverse_key(rk, rk_tmp, Nr);
+    aes_crypt_ecb(Nr, rk, AES_DECRYPT, input, output);
     return;
   }
 #endif
@@ -550,17 +615,17 @@ void AES_ECB_decrypt(const uint8_t* input, const uint8_t* key, uint8_t *output, 
 
 #if defined(CBC) && (CBC == 1)
 
-#if defined(HAVE_AMD64)
+#ifdef HAVE_HARDAES
 /*
  * AESNI-CBC buffer encryption/decryption
  */
-static void aesni_crypt_cbc( int mode,
-                             int nr,
-                             uint8_t* rk,
-                             uint32_t length,
-                             uint8_t iv[16],
-                             const uint8_t *input,
-                             uint8_t *output )
+static void aes_crypt_cbc( int mode,
+                           int nr,
+                           uint8_t* rk,
+                           uint32_t length,
+                           uint8_t iv[16],
+                           const uint8_t *input,
+                           uint8_t *output )
 {
     int i;
     uint8_t temp[16];
@@ -570,7 +635,7 @@ static void aesni_crypt_cbc( int mode,
         while( length > 0 )
         {
             memcpy( temp, input, 16 );
-            aesni_crypt_ecb( nr, rk, mode, input, output );
+            aes_crypt_ecb( nr, rk, mode, input, output );
 
             for( i = 0; i < 16; i++ )
                 output[i] = (uint8_t)( output[i] ^ iv[i] );
@@ -589,7 +654,7 @@ static void aesni_crypt_cbc( int mode,
             for( i = 0; i < 16; i++ )
                 output[i] = (uint8_t)( input[i] ^ iv[i] );
 
-            aesni_crypt_ecb( nr, rk, mode, output, output );
+            aes_crypt_ecb( nr, rk, mode, output, output );
             memcpy( iv, output, 16 );
 
             input  += 16;
@@ -598,7 +663,7 @@ static void aesni_crypt_cbc( int mode,
         }
     }
 }
-#endif /* HAVE_AMD64 */
+#endif /* HAVE_HARDAES */
 
 static void XorWithIv(uint8_t* buf)
 {
@@ -614,20 +679,20 @@ void AES_CBC_encrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length, co
   uintptr_t i;
   uint8_t extra = length % BLOCKLEN; /* Remaining bytes in the last non-full block */
 
-#if defined(HAVE_AMD64)
+#if defined(HAVE_HARDAES)
   uint8_t iv_tmp[16];
   uint8_t rk[AES_RKSIZE];
 
-  if (aesni_supported())
+  if (aes_supported())
   {
     if (key == NULL || iv == NULL)
     {
       return;
     }
     memcpy(iv_tmp, iv, 16);
-    aesni_setkey_enc(rk, key);
-    aesni_crypt_cbc(AES_ENCRYPT, Nr, rk, \
-                    length, iv_tmp, input, output);
+    aes_setkey_enc(rk, key);
+    aes_crypt_cbc(AES_ENCRYPT, Nr, rk, \
+                  length, iv_tmp, input, output);
     return;
   }
 #endif
@@ -669,22 +734,22 @@ void AES_CBC_decrypt_buffer(uint8_t* output, uint8_t* input, uint32_t length, co
   uintptr_t i;
   uint8_t extra = length % BLOCKLEN; /* Remaining bytes in the last non-full block */
 
-#if defined(HAVE_AMD64)
+#if defined(HAVE_HARDAES)
   uint8_t iv_tmp[16];
   uint8_t rk[AES_RKSIZE];
   uint8_t rk_tmp[AES_RKSIZE];
 
-  if (aesni_supported())
+  if (aes_supported())
   {
     if (key == NULL || iv == NULL)
     {
       return;
     }
     memcpy(iv_tmp, iv, 16);
-    aesni_setkey_enc(rk_tmp, key);
-    aesni_inverse_key(rk, rk_tmp, Nr);
-    aesni_crypt_cbc(AES_DECRYPT, Nr, rk, \
-                    length, iv_tmp, input, output);
+    aes_setkey_enc(rk_tmp, key);
+    aes_inverse_key(rk, rk_tmp, Nr);
+    aes_crypt_cbc(AES_DECRYPT, Nr, rk, \
+                  length, iv_tmp, input, output);
     return;
   }
 #endif

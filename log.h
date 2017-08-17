@@ -36,7 +36,9 @@
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <arpa/inet.h>
+#ifndef HAVE_MUSL
 #include <linux/if_ether.h>
+#endif
 #include <linux/filter.h>
 
 #include <sys/time.h>

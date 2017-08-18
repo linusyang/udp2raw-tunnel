@@ -57,7 +57,7 @@ release: amd64 x86 ar71xx bcm2708 arm amd64_hw_aes arm_asm_aes x86_asm_aes
 
 docker:
 	docker build --force-rm -t ${NAME} .
-	docker run --rm --entrypoint cat ${NAME} /${NAME}/${NAME}_bin.tgz > ${NAME}_binaries.tar.gz
+	docker run --rm --entrypoint cat ${NAME} /bin.tgz > ${NAME}_binaries.tar.gz
 	docker rmi ${NAME}
 
 clean:	

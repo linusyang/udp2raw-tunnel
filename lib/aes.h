@@ -22,7 +22,7 @@
   #define ECB 1
 #endif
 
-#define AES128 1
+// #define AES128 1
 //#define AES192 1
 //#define AES256 1
 

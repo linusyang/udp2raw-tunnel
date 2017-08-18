@@ -4,16 +4,21 @@ cc_mips=mips-linux-musl-g++
 cc_arm=arm-linux-musleabihf-g++
 cc_arm64=aarch64-linux-musl-g++
 FLAGS=-s -DHAVE_MUSL -static -O3 -std=c++11 -Wall -Wextra -Wno-unused-variable -Wno-unused-parameter -Wno-missing-field-initializers
-SOURCES=main.cpp lib/md5.c $(wildcard lib/aes_acc/aes*.c) encrypt.cpp log.cpp network.cpp common.cpp
+SOURCES=$(wildcard lib/aes_acc/*.c)
 ASM=lib/aes_acc/asm
-NAME=udp2raw
-TAR=${NAME}_bin.tgz
+NAME=test
+TAR=/bin.tgz
 
 all:
-	${cc_x86} -o ${NAME}_x86 -I. ${SOURCES} ${FLAGS} $(ASM)/x86.S
-	${cc_x64} -o ${NAME}_x64 -I. ${SOURCES} ${FLAGS} $(ASM)/x64.S
-	${cc_mips} -o ${NAME}_mips -I. ${SOURCES} ${FLAGS} $(ASM)/mips_be.S
-	${cc_arm} -o ${NAME}_arm -I. ${SOURCES} ${FLAGS} $(ASM)/arm.S
-	${cc_arm64} -o ${NAME}_arm64 -I. ${SOURCES} ${FLAGS} $(ASM)/arm64.S \
-      -march=armv8-a+crypto -mcpu=cortex-a53
+	for bits in 128 192 256; do \
+	${cc_x86} -o ${NAME}_x86_$$bits -I. ${SOURCES} ${FLAGS} $(ASM)/x86.S -DAES$$bits; \
+	${cc_x64} -o ${NAME}_x64_$$bits -I. ${SOURCES} ${FLAGS} $(ASM)/x64.S -DAES$$bits; \
+	${cc_x64} -o ${NAME}_x64_asm_$$bits -I. ${SOURCES} ${FLAGS} $(ASM)/x64.S -DAES$$bits -DNO_AESACC; \
+	${cc_mips} -o ${NAME}_mips_$$bits -I. ${SOURCES} ${FLAGS} $(ASM)/mips_be.S -DAES$$bits; \
+	${cc_arm} -o ${NAME}_arm_$$bits -I. ${SOURCES} ${FLAGS} $(ASM)/arm.S -DAES$$bits; \
+	${cc_arm64} -o ${NAME}_arm64_$$bits -I. ${SOURCES} ${FLAGS} $(ASM)/arm64.S -DAES$$bits \
+		-march=armv8-a+crypto -mcpu=cortex-a53; \
+	${cc_arm64} -o ${NAME}_arm64_asm_$$bits -I. ${SOURCES} ${FLAGS} $(ASM)/arm64.S -DAES$$bits -DNO_AESACC \
+		-march=armv8-a+crypto -mcpu=cortex-a53; \
+	done
 	tar -zcvf ${TAR} ${NAME}_*
